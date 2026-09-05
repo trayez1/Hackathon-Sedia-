@@ -1,131 +1,236 @@
-# okayUway backend
+# okayUway
 
-A real REST API + SQLite database for okayUway, ported from the original
-frontend mock (`src/services/store.js` + `src/data/seed.js`). Same scoring
-engine, same routing logic, same demo dataset — now backed by an actual
-database instead of `localStorage`.
+**"Normal maps tell you how to get there. okayUway tells you whether you can actually get there."**
 
-## Status
+Accessibility-aware navigation for wheelchair users and people with mobility impairments.
+Pilot area: **Multimedia University (MMU), Cyberjaya** (demo data only).
 
-This backend is complete and functional on its own (you can hit every
-endpoint with curl/Postman right now). **The frontend has not been wired up
-to it yet** — `src/services/store.js` still talks to `localStorage`. That
-rewire is the next step; this backend is designed so that swap will be a
-single-file change on the frontend side, since every endpoint mirrors a
-function that already exists in the mock store.
+## What was built
 
-## Setup
+A working single-page app (not a mockup) implementing the FIND → VERIFY → ROUTE → REPORT → UPDATE loop:
 
-```bash
-cd backend
-npm install
-cp .env.example .env
-npm run dev       # http://localhost:4000, auto-restarts on file changes
-# or: npm start
+- Landing page with the product pitch and demo stats
+- Interactive SVG map of MMU Cyberjaya (15 locations, pedestrian paths)
+- Accessibility profile selector (Wheelchair / Mobility impairment; Visual impairment shown as "coming soon")
+- Destination search, scoped strictly to the MMU pilot dataset, with an explicit
+  "outside pilot area" message for anything else (no fabricated data)
+- Accessibility-aware route scoring engine (not shortest-path): every route is scored from
+  live feature state — stairs, ramp condition, lift status, pavement condition, entrance
+  accessibility, and data freshness — see `src/services/store.js: scoreRoute()`
+- Side-by-side Fastest vs. Recommended Accessible route comparison, with the app recommending
+  the accessible route even when longer
+- Live "Accessibility Warning" banner + "Show alternative route" when the active route crosses
+  a broken/blocked feature
+- Report an Obstacle flow: type, location, description, **photo upload**, and a **simulated AI
+  image analysis step** (clearly labeled as simulated — see below)
+- Community verification: Confirm / Dispute buttons, confidence %, "conflicting reports" state,
+  auto-escalation to "verified" after 5 confirmations
+- Live map + route recalculation: verifying a report immediately downgrades the linked
+  accessibility feature, which changes the score of any route depending on it
+- Admin dashboard (demo login) with stats, a sortable report table (Verify / Reject / Resolve),
+  and an accessibility heatmap ranking locations by report volume
+- Accessibility of the app itself: keyboard navigation, focus rings, ARIA labels on the map and
+  progress bars, text alongside every icon, no color-only signaling, large touch targets
+
+## Architecture
+
+```
+Frontend (React + Vite + Tailwind v4)
+        ↓
+API client  (src/services/store.js — fetch + Server-Sent Events)
+        ↓
+Backend (backend/ — Node + Express)
+        ↓
+Database (SQLite via better-sqlite3 — backend/src/db/)
+        ↓
+Scoring + routing engine (backend/src/services/scoring.js, routingEngine.js)
+        ↓
+AI abstraction (backend/src/services/aiAnalysis.js — swappable for a real CV/LLM API)
+        ↓
+Map (src/components/CampusMap.jsx — SVG, swappable for Mapbox/OSM)
 ```
 
-The SQLite database file is created automatically (default: `backend/data/okayuway.sqlite`)
-and seeded with the full MMU Cyberjaya demo dataset on first run.
+This started as a hackathon prototype with everything — API, database, routing, AI — mocked
+directly in the browser (`src/services/store.js` + `src/data/seed.js`, backed by
+`localStorage`). It's since grown a real backend: `backend/` is a standalone Node + Express
+API with a real SQLite database, and `src/services/store.js` is now an actual API client
+(`fetch` + Server-Sent Events for live sync) rather than a mock — same exported function
+names as before, so the rest of the UI barely changed.
 
-Default admin login (change `ADMIN_PASSWORD` in `.env` before this is ever
-public): `admin@mmu.demo` / `demo1234`.
+`backend/src/db/seed-data.js` ports the original MMU Cyberjaya demo dataset 1:1, and
+`backend/src/services/scoring.js` / `routingEngine.js` port the original scoring/Dijkstra
+routing logic line-for-line — same numbers, just computed server-side against real rows now.
+`src/data/seed.js` still exists on the frontend purely for static map geometry (building
+coordinates, pedestrian-path lines used to draw the SVG); it's no longer the source of truth
+for locations/features/reports — the backend's database is.
 
-## Endpoints
+Data shapes mirror the schema in the brief: `Users` (implicit/anonymous in this demo),
+`Locations`, `AccessibilityFeatures`, `Reports`, `Verifications` (confirm/dispute counters),
+`Routes` (computed on request via `GET /api/routes`, not stored).
 
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| GET | `/api/bootstrap` | — | Locations + paths + features + reports in one call |
-| GET | `/api/locations` | — | All locations |
-| GET | `/api/locations/:id` | — | One location |
-| GET | `/api/paths` | — | Pedestrian path edges |
-| GET | `/api/search?q=` | — | Destination search (name/type/alias) |
-| GET | `/api/features` | — | All accessibility features |
-| GET | `/api/features/:id` | — | One feature |
-| GET | `/api/locations/:id/features` | — | Features at a location |
-| GET | `/api/routes?destination=&origin=` | — | Fastest + accessible scored routes |
-| GET | `/api/reports` | — | All reports (newest first) |
-| GET | `/api/locations/:id/reports` | — | Reports at a location |
-| POST | `/api/reports` | — | Submit a report (`{locationId, featureId?, type, description, photoDataUrl?, aiAnalysis?}`) |
-| POST | `/api/reports/:id/confirm` | — | Community confirm (auto-verifies at 5 confirmations) |
-| POST | `/api/reports/:id/dispute` | — | Community dispute |
-| POST | `/api/ai-analysis` | — | Simulated obstacle-photo analysis |
-| POST | `/api/admin/login` | — | `{email, password}` → `{token, name, email}` |
-| POST | `/api/admin/reports/:id/status` | Bearer token | `{status}` — verify/reject/resolve, cascades to feature status |
-| GET | `/api/admin/stats` | — | Dashboard counters |
-| GET | `/api/admin/heatmap` | — | Report counts per location |
-| POST | `/api/admin/reset` | Bearer token | Reset DB to seed data |
-| GET | `/api/events` | — | Server-Sent Events stream for live cross-tab/device sync |
-| POST | `/api/auth/register` | — | `{name, email, phone, password, selfieDataUrl, idDocumentDataUrl, consent}` → account created with `verificationStatus: "pending"` |
-| POST | `/api/auth/login` | — | `{email, password}` → `{token, ...profile}` |
-| GET | `/api/auth/me` | Bearer token (user) | Live profile + verification status for the logged-in account |
-| GET | `/api/admin/users/pending` | Bearer token (admin) | Accounts awaiting identity verification (metadata only) |
-| GET | `/api/admin/users/:id` | Bearer token (admin) | One account's verification detail (metadata only) |
-| GET | `/api/admin/users/:id/document/selfie` \| `/id` | Bearer token (admin) | Streams the stored selfie/ID photo |
-| POST | `/api/admin/users/:id/verify` | Bearer token (admin) | Approve verification, records which admin approved it |
-| POST | `/api/admin/users/:id/reject` | Bearer token (admin) | Reject verification, records which admin rejected it |
-| POST | `/api/admin/verification/cleanup` | Bearer token (admin) | Deletes selfie/ID files past the retention window (see below) |
+## Completed features (checklist)
 
-`POST /api/reports` now requires a logged-in user (`Authorization: Bearer <user token>`); the reporting account is taken from the token, never from the request body.
+- [x] MMU Cyberjaya map (Priority 1)
+- [x] Destination search, scoped to pilot + outside-pilot protection (Priority 2)
+- [x] Wheelchair accessibility profile (Priority 3)
+- [x] Accessibility-aware route scoring, not shortest-path (Priority 4)
+- [x] Accessibility score with visual bar + plain-language caveat (Priority 5)
+- [x] Report obstacle flow (Priority 6)
+- [x] Photo upload with client-side validation (Priority 7)
+- [x] AI analysis abstraction, clearly labeled as simulated (Priority 8)
+- [x] Community verification (confirm/dispute, confidence, conflicting reports) (Priority 9)
+- [x] Admin dashboard with demo login, report table, actions (Priority 10)
+- [x] Accessibility heatmap (Priority 11)
+- [x] UI polish pass (Priority 12)
+- [x] Real backend / DB / auth — Node + Express + SQLite, JWT admin login (see `backend/`)
+- [ ] Visual-impairment profile — UI stub only, not implemented (explicitly out of scope for MVP)
 
-Uploaded obstacle photos are decoded from the base64 data URL the frontend
-already produces and saved under `backend/uploads/`, served at `/uploads/…`.
+## Deploying to Render
 
-## Architecture notes
+See [RENDER.md](./RENDER.md) for a one-click Blueprint deploy (backend web service +
+frontend static site).
 
-- `src/db/schema.sql` + `src/db/seed-data.js` + `src/db/index.js` — schema,
-  seed dataset (ported 1:1 from `src/data/seed.js`), and migration/seeding.
-- `src/services/scoring.js` + `routingEngine.js` — the accessibility scoring
-  engine and Dijkstra-based dynamic routing, ported 1:1 from the frontend
-  mock's `scoreRoute()` / graph logic, now reading live feature status from
-  SQLite.
-- `src/services/reportsService.js` — report lifecycle: creation, confirm/
-  dispute, auto-escalation at 5 confirmations, and admin verification
-  (which downgrades the linked feature's status so routes re-score live).
-- `src/services/eventBus.js` + `routes/events.js` — SSE broadcast so a
-  report submitted on one device shows up live on another.
+## Running on Android (emulator or device)
 
-- `src/services/secureDocumentStorage.js` + `src/services/usersService.js` —
-  identity-verification document storage and account/verification state
-  (see below).
+See [ANDROID.md](./ANDROID.md) for wrapping this as an installable Android app via
+Capacitor — no Mac required, just Android Studio.
 
-## Identity verification — what this implements, and what it doesn't
+## How to run
 
-Registration collects a selfie and a photo of an ID document and stores the
-account as `verificationStatus: "pending"`. **This is document/selfie
-_submission_, not proof of identity.** Nothing in this codebase confirms the
-photo is a genuine, unaltered ID, that the selfie matches it, or that either
-belongs to the person registering — that requires a real identity-verification
-provider (e.g. a liveness-check + document-authenticity API), which is not
-wired up here. An admin manually reviewing the two photos in the dashboard
-and clicking Approve/Reject is the only check in this build.
+There are now two things to start: the backend API (with its own SQLite database) and the
+frontend. Run them in two terminals.
 
-Storage/security choices worth knowing before deploying this anywhere real:
+**1. Backend** (Node + Express + SQLite):
 
-- Selfie/ID files are written to `SECURE_UPLOADS_DIR` (default
-  `backend/secure-uploads/`), which is never mounted with `express.static`
-  and is `.gitignore`d. The only way to read one back is
-  `GET /api/admin/users/:id/document/:kind`, which requires an admin JWT.
-  Files are written with `0600` permissions, but the directory itself is
-  plain local disk — for production, put this behind actual encryption at
-  rest (e.g. an S3 bucket with server-side encryption + a private ACL) and a
-  host that isn't shared with anything else.
-- `POST /api/admin/verification/cleanup` deletes documents past
-  `VERIFICATION_DOCUMENT_RETENTION_DAYS` (default 30) for accounts that have
-  already been verified or rejected — but nothing calls it automatically.
-  Wire it to a cron/scheduled job before relying on it as an actual
-  retention policy.
-- No claim is made anywhere in this code about compliance with a specific
-  privacy law (GDPR, PDPA, etc.) — that needs an actual legal/compliance
-  review of the real deployment, not just this implementation.
-- `admin_users`/JWT auth here is the same lightweight setup used for the
-  rest of this demo backend (see `.env.example`) — rotate `JWT_SECRET` and
-  put real access controls around who gets an admin account before this
-  goes anywhere near real users' ID documents.
+```bash
+cd okayuway/backend
+npm install
+cp .env.example .env
+npm run dev
+```
 
-## Not done yet
+This starts the API at `http://localhost:4000` and auto-seeds a fresh SQLite database
+(`backend/data/okayuway.sqlite`) with the full MMU Cyberjaya demo dataset on first run. Sanity
+check it's up: open `http://localhost:4000/api/bootstrap` — you should get back JSON with
+`locations`, `paths`, `features`, and `reports`.
 
-- Frontend (`src/services/store.js`) still needs to be rewritten to call
-  this API instead of `localStorage`, plus small edits to a handful of
-  components that currently call store functions synchronously.
-- A scheduled job to actually run the verification-document retention
-  cleanup (see above) instead of it being an admin-triggered endpoint.
+**2. Frontend** (React + Vite):
+
+```bash
+cd okayuway
+npm install
+cp .env.example .env   # only needed if your backend isn't on the default localhost:4000
+npm run dev
+```
+
+Then open the printed local URL (typically `http://localhost:5173`). The app shows a brief
+"Loading campus data…" screen while it fetches from the backend on first load; if the backend
+isn't running, it shows a "Can't reach the okayUway server" message with a retry button instead
+of a blank/broken UI.
+
+To build a production frontend bundle:
+
+```bash
+npm run build
+npm run preview
+```
+
+(The backend is a plain Node process — `npm start` in `backend/` — deploy it wherever you'd
+deploy any small Express API.)
+
+## Environment variables
+
+**Frontend** (`okayuway/.env`, see `.env.example`):
+
+```
+VITE_API_BASE_URL=http://localhost:4000   # the backend from step 1 above
+```
+
+**Backend** (`okayuway/backend/.env`, see `backend/.env.example`):
+
+```
+PORT=4000
+DB_PATH=./data/okayuway.sqlite
+UPLOADS_DIR=./uploads
+UPLOADS_URL_PREFIX=/uploads
+CORS_ORIGIN=http://localhost:5173         # your frontend dev server / deployed URL
+JWT_SECRET=change-this-to-a-long-random-string
+JWT_EXPIRES_IN=12h
+ADMIN1_NAME=Adib (Accessibility Officer)
+ADMIN1_EMAIL=adib@mmu.demo
+ADMIN1_PASSWORD=demo1234                  # only used the FIRST time the DB is created
+
+ADMIN2_NAME=Aniq (Accessibility Officer)
+ADMIN2_EMAIL=aniq@mmu.demo
+ADMIN2_PASSWORD=demo1234                  # only used the FIRST time the DB is created
+```
+
+Never commit real secrets — both `.env` files are already covered by `.gitignore`. If you swap
+the simulated AI analysis for a real computer-vision/LLM provider, add its API key to
+`backend/.env` and call it from `backend/src/services/aiAnalysis.js` — the route handler and
+frontend don't need to change.
+
+## Demo credentials
+
+Admin dashboard (`/admin`) — a real JWT-backed login now (`POST /api/admin/login`), seeded
+into the database from the backend's `.env` the first time it runs. Two admin accounts are
+seeded by default:
+
+```
+Email:    adib@mmu.demo
+Password: demo1234
+
+Email:    aniq@mmu.demo
+Password: demo1234
+```
+
+Change `ADMIN1_PASSWORD` / `ADMIN2_PASSWORD` in `backend/.env` before this is ever exposed
+beyond a local demo — note they're only read on the very first run (when the database is
+created); changing them later requires resetting the database or updating the rows directly.
+
+## Hackathon demo script (2–3 minutes)
+
+1. **Open** okayUway on the landing page — read the tagline, click **Explore MMU**.
+2. **Select** the Wheelchair profile (selected by default).
+3. **Search** "Library" and select **MMU Library**.
+4. **Show routes**: point out Fastest (400m, 5 min, low score, stairs) vs. **Recommended
+   Accessible Route** (650m, 8 min, high score, step-free) — note the app recommends the
+   longer route.
+5. **The wow moment**: open **Report an Obstacle**, select **Faculty of Engineering (FOE)**,
+   pick **Blocked ramp**, upload any photo, click **Run AI accessibility analysis** — show the
+   simulated AI detecting an obstruction with HIGH impact — submit.
+6. **Live update**: go back to **Explore**, select **FOE** — the accessible route to FOE now
+   shows a lower score / warning banner because the ramp feature is scored live.
+7. **Admin view**: open **Admin** (demo login above), show the new report in the table with
+   AI-assisted severity, click **Verify** — status flips to Verified and feeds back into the map.
+8. Close on the heatmap: "this turns okayUway into a data-driven accessibility management tool
+   for the university, not just a map for one student."
+
+## Known limitations
+
+- All accessibility data is **demo data** for a hackathon pilot — it is not verified, official
+  MMU accessibility information, and should not be used for real navigation decisions.
+- Routing from the Main Gate uses precomputed route templates (with live re-scoring from
+  feature state); any other starting point falls back to live Dijkstra routing over the
+  pedestrian-path graph — see `getRoutesForDestination()` in `backend/src/services/routingEngine.js`.
+- The AI image analysis is a deterministic, clearly-labeled simulation, not a real computer
+  vision model — see `runAIAnalysis()` in `backend/src/services/aiAnalysis.js`.
+- SQLite (via `better-sqlite3`) is fine for a pilot but isn't built for concurrent multi-writer
+  production load — swap in Postgres if this goes beyond a demo.
+- Visual-impairment support is a UI placeholder, not implemented.
+- The backend has no rate limiting or request validation beyond basic required-field checks —
+  add both before exposing it outside a local/demo network.
+
+## Future improvements
+
+- Connect `runAIAnalysis` to a real CV/LLM API for genuine obstacle detection
+- Replace the stylized SVG map with Mapbox/OSM + real GPS coordinates
+- Move from SQLite to Postgres (or Supabase) for real concurrent multi-user load
+- Full graph-based routing for every origin, not just the curated Main Gate templates
+- Expand beyond the MMU pilot: other universities → Cyberjaya → Kuala Lumpur → Malaysia → ASEAN
+
+
+## Demo priorities implemented
+- **MMU Cyberjaya campus map:** upgraded interactive SVG campus plan with building footprints, pedestrian paths, active route highlighting, obstacle indicators, heatmap, and zoom/reset controls.
+- **Destination search:** searches building names, faculty/type names, and common MMU abbreviations; supports Enter-to-select and Escape/clear.
+- **Accessibility profile:** wheelchair and mobility profiles are selectable and persist for the current session; visual impairment remains marked as a future profile.
