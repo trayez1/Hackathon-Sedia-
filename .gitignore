@@ -1,6 +1,0 @@
-node_modules
-dist
-.env
-
-# Identity-verification documents (selfies + ID photos) — never commit these.
-backend/secure-uploads/
